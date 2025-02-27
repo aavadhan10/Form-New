@@ -708,6 +708,90 @@ def show_skills_form(submitter_email, submitter_name):
     with st.form("skills_matrix"):
         submitted = st.form_submit_button("Submit Skills Matrix")
         
+    # Handle form submission outside the form component
+    if submitted:
+        try:
+            # Validate total points before submission
+            if abs(st.session_state.total_points - MAX_TOTAL_POINTS) > 0.1:
+                st.error(f"Total points must be exactly {MAX_TOTAL_POINTS}. Current total: {st.session_state.total_points}")
+                return
+                
+            # Prepare new response
+            response_data = {
+                'Response ID': str(uuid.uuid4())[:8],
+                'Submitter Name': submitter_name,
+                'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'Submitter Email': submitter_email,
+                **st.session_state.skills
+            }
+            
+            # Save response to CSV first
+            save_success = save_response(response_data)
+            if not save_success:
+                st.error("Error saving your response. Please try again.")
+                return
+            
+            # Show success message immediately
+            st.success("Form submitted successfully! Administrator will be notified of your submission.")
+            
+            # Try to send email notification, but continue even if it fails
+            try:
+                email_sent = send_notification_email(submitter_name, submitter_email, st.session_state.skills)
+                if email_sent:
+                    st.info("Email notification sent successfully.")
+                else:
+                    st.warning("Email notification could not be sent, but your submission was saved.")
+            except Exception as e:
+                st.warning(f"Email notification error: {str(e)}, but your submission was saved.")
+            
+            # Set form_submitted to True
+            st.session_state.form_submitted = True
+            
+            # Add a button to continue rather than auto-refreshing
+            if st.button("View Your Skills Report"):
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"An error occurred during submission: {str(e)}")
+            st.info("Please try again or contact support if the issue persists.")
+    
+    # Create input fields for each skill
+    skill_inputs = {}
+    for skill in st.session_state.skills.keys():
+        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        with col1:
+            st.markdown(f"**{skill}**")
+        
+        # Calculate maximum points available for this skill
+        current_skill_points = st.session_state.get(f"input_{skill}", 0)
+        remaining_points = MAX_TOTAL_POINTS - (st.session_state.total_points - current_skill_points)
+        points_available = min(MAX_POINTS_PER_SKILL, remaining_points)
+        
+        with col2:
+            try:
+                value = st.number_input(
+                    f"{skill} points",
+                    min_value=0,
+                    max_value=points_available,
+                    value=current_skill_points,
+                    key=f"input_{skill}",
+                    on_change=update_total_points,
+                    help="You've used all 120 points. To add points here, first reduce points in other skills." if st.session_state.total_points >= MAX_TOTAL_POINTS and current_skill_points == 0 else None
+                )
+                st.session_state.skills[skill] = value
+                skill_inputs[skill] = value
+            except:
+                if st.session_state.total_points >= MAX_TOTAL_POINTS:
+                    st.error("You've used all 120 points. To add points here, first reduce points in other skills.")
+        
+        with col3:
+            st.markdown(get_expertise_level(value))
+    
+    # Submit form
+    with st.form("skills_matrix"):
+        submitted = st.form_submit_button("Submit Skills Matrix")
+        
         if submitted:
             try:
                 # Validate total points before submission
