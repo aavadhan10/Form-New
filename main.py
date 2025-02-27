@@ -705,10 +705,11 @@ def show_skills_form(submitter_email, submitter_name):
             st.markdown(get_expertise_level(value))
     
     # Submit form
-    with st.form("skills_matrix"):
-        submitted = st.form_submit_button("Submit Skills Matrix")
-        
-        if submitted:
+with st.form("skills_matrix"):
+    submitted = st.form_submit_button("Submit Skills Matrix")
+    
+    if submitted:
+        try:
             # Validate total points before submission
             if abs(st.session_state.total_points - MAX_TOTAL_POINTS) > 0.1:
                 st.error(f"Total points must be exactly {MAX_TOTAL_POINTS}. Current total: {st.session_state.total_points}")
@@ -723,18 +724,35 @@ def show_skills_form(submitter_email, submitter_name):
                 **st.session_state.skills
             }
             
-            # Save response to CSV
-            if save_response(response_data):
-                # Send email notification
-                email_sent = send_notification_email(submitter_name, submitter_email, st.session_state.skills)
-                
-                st.success("Form submitted successfully! Administrator will be notified of your submission.")
-                
-                # Set form_submitted to True and show success message
-                st.session_state.form_submitted = True
-                st.rerun()  # Use st.rerun() instead of st.experimental_rerun()
-            else:
+            # Save response to CSV first
+            save_success = save_response(response_data)
+            if not save_success:
                 st.error("Error saving your response. Please try again.")
+                return
+            
+            # Show success message immediately
+            st.success("Form submitted successfully! Administrator will be notified of your submission.")
+            
+            # Try to send email notification, but continue even if it fails
+            try:
+                email_sent = send_notification_email(submitter_name, submitter_email, st.session_state.skills)
+                if email_sent:
+                    st.info("Email notification sent successfully.")
+                else:
+                    st.warning("Email notification could not be sent, but your submission was saved.")
+            except Exception as e:
+                st.warning(f"Email notification error: {str(e)}, but your submission was saved.")
+            
+            # Set form_submitted to True
+            st.session_state.form_submitted = True
+            
+            # Add a button to continue rather than auto-refreshing
+            if st.button("View Your Skills Report"):
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"An error occurred during submission: {str(e)}")
+            st.info("Please try again or contact support if the issue persists.")
 
 def main():
     # Initialize total_points in session state if it doesn't exist
