@@ -706,7 +706,7 @@ def show_skills_form(submitter_email, submitter_name):
     
     # Submit form
         with st.form("skills_matrix"):
-    submitted = st.form_submit_button("Submit Skills Matrix")
+        submitted = st.form_submit_button("Submit Skills Matrix")
     
     if submitted:
         try:
