@@ -15,7 +15,7 @@ def send_notification_email(submitter_name, submitter_email, skills_data):
     try:
         # For Outlook.com/Hotmail
         smtp_server = "smtp.office365.com"
-        smtp_port = 587
+        smtp_port = 465
         username = st.secrets.email_credentials.sender_email
         password = st.secrets.email_credentials.sender_password
         recipient_email = st.secrets.email_credentials.recipient_email
