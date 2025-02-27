@@ -450,16 +450,34 @@ def generate_skills_report(submitter_name, submitter_email):
     try:
         df = pd.read_csv("skills_responses.csv")
         
-        # Find the user's response
-        user_response = df[df['Submitter Email'] == submitter_email].iloc[-1]  # Get most recent if multiple
+        # Check if user data exists in the DataFrame
+        user_data = df[df['Submitter Email'] == submitter_email]
+        
+        if user_data.empty:
+            st.error(f"No data found for {submitter_email}. Please contact support.")
+            return None
+        
+        # Find the user's most recent response
+        user_response = user_data.iloc[-1]  # Get most recent if multiple
         
         # Get metadata columns
         metadata_cols = ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
         skill_cols = [col for col in df.columns if col not in metadata_cols]
         
-        # Calculate team averages (excluding the current user)
-        team_df = df[df['Submitter Email'] != submitter_email]
-        team_averages = team_df[skill_cols].mean()
+        # Handle the case where there might be only one submission (the current user)
+        if len(df) <= 1:
+            # No team data available, use zeros for comparison
+            team_averages = pd.Series(0, index=skill_cols)
+            team_comparison_available = False
+        else:
+            # Calculate team averages (excluding the current user)
+            team_df = df[df['Submitter Email'] != submitter_email]
+            if team_df.empty:
+                team_averages = pd.Series(0, index=skill_cols)
+                team_comparison_available = False
+            else:
+                team_averages = team_df[skill_cols].mean()
+                team_comparison_available = True
         
         # Create user skills dictionary
         user_skills = {
@@ -470,13 +488,19 @@ def generate_skills_report(submitter_name, submitter_email):
         
         # Categorize skills
         for skill in skill_cols:
+            # Handle case where the skill column might not exist
+            if skill not in user_response:
+                continue
+                
             value = user_response[skill]
-            if value >= 8:
-                user_skills['Primary'].append((skill, value))
-            elif value >= 3:
-                user_skills['Secondary'].append((skill, value))
-            elif value >= 1:
-                user_skills['Limited'].append((skill, value))
+            # Check if value is numeric
+            if not pd.isna(value) and isinstance(value, (int, float)):
+                if value >= 8:
+                    user_skills['Primary'].append((skill, value))
+                elif value >= 3:
+                    user_skills['Secondary'].append((skill, value))
+                elif value >= 1:
+                    user_skills['Limited'].append((skill, value))
                 
         # Sort skills by value within each category
         for category in user_skills:
@@ -485,53 +509,83 @@ def generate_skills_report(submitter_name, submitter_email):
         # Create the report
         st.markdown("## Your Skills Matrix Report")
         st.markdown(f"### Generated for: {submitter_name}")
-        st.markdown(f"Submission Date: {user_response['Timestamp']}")
+        st.markdown(f"Submission Date: {user_response.get('Timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
         
-        # Add download button for PDF report
-        pdf_buffer = create_pdf_report(submitter_name, submitter_email)
-        st.download_button(
-            label="📥 Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
-            mime="application/pdf",
-        )
-        
-        # Create radar chart for top skills comparison
-        top_skills = (user_skills['Primary'] + user_skills['Secondary'])[:8]  # Top 8 skills
-        if top_skills:
-            radar_data = {
-                'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
-                'Your Score': [skill[1] for skill in top_skills],
-                'Team Average': [team_averages[skill[0]] for skill in top_skills]
-            }
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=radar_data['Your Score'],
-                theta=radar_data['Skill'],
-                fill='toself',
-                name='Your Score',
-                line_color='#4169E1'
-            ))
-            fig.add_trace(go.Scatterpolar(
-                r=radar_data['Team Average'],
-                theta=radar_data['Skill'],
-                fill='toself',
-                name='Team Average',
-                line_color='#90EE90'
-            ))
-            
-            fig.update_layout(
-                polar=dict(
-                    radialaxis=dict(
-                        visible=True,
-                        range=[0, 10]
-                    )),
-                showlegend=True,
-                title="Top Skills Comparison"
+        # Add download button for PDF report if the function exists
+        try:
+            pdf_buffer = create_pdf_report(submitter_name, submitter_email)
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
+                mime="application/pdf",
             )
+        except Exception as e:
+            st.warning(f"PDF report generation unavailable: {str(e)}")
+        
+        # Create radar chart for top skills comparison if team data is available
+        top_skills = (user_skills['Primary'] + user_skills['Secondary'])[:8]  # Top 8 skills
+        
+        if top_skills and team_comparison_available:
+            try:
+                radar_data = {
+                    'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
+                    'Your Score': [skill[1] for skill in top_skills],
+                    'Team Average': [team_averages.get(skill[0], 0) for skill in top_skills]
+                }
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatterpolar(
+                    r=radar_data['Your Score'],
+                    theta=radar_data['Skill'],
+                    fill='toself',
+                    name='Your Score',
+                    line_color='#4169E1'
+                ))
+                fig.add_trace(go.Scatterpolar(
+                    r=radar_data['Team Average'],
+                    theta=radar_data['Skill'],
+                    fill='toself',
+                    name='Team Average',
+                    line_color='#90EE90'
+                ))
+                
+                fig.update_layout(
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, 10]
+                        )),
+                    showlegend=True,
+                    title="Top Skills Comparison"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as chart_error:
+                st.warning(f"Could not generate radar chart: {str(chart_error)}")
+                
+        elif top_skills and not team_comparison_available:
+            st.info("You are the first submission - team comparison not available yet.")
             
-            st.plotly_chart(fig, use_container_width=True)
+            # Create a simple bar chart of the user's top skills
+            try:
+                bar_data = {
+                    'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
+                    'Your Score': [skill[1] for skill in top_skills]
+                }
+                
+                fig = px.bar(
+                    x=bar_data['Skill'], 
+                    y=bar_data['Your Score'],
+                    title="Your Top Skills",
+                    color=bar_data['Your Score'],
+                    color_continuous_scale=[[0, '#FFE5B4'], [0.3, '#90EE90'], [0.8, '#4169E1']]
+                )
+                fig.update_layout(xaxis_title="Skill", yaxis_title="Score")
+                
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as chart_error:
+                st.warning(f"Could not generate bar chart: {str(chart_error)}")
         
         # Display categorized skills
         categories = {
@@ -547,9 +601,12 @@ def generate_skills_report(submitter_name, submitter_email):
                     # Remove the skill number suffix for cleaner display
                     skill_name = skill.replace(' (Skill', '').split(')')[0]
                     
-                    # Get team average for comparison
-                    team_avg = team_averages[skill]
-                    comparison = value - team_avg
+                    # Get team average for comparison if available
+                    if team_comparison_available:
+                        team_avg = team_averages.get(skill, 0)
+                        comparison_text = f"(Team avg: {team_avg:.1f})"
+                    else:
+                        comparison_text = "(No team data yet)"
                     
                     # Create colored box with skill info
                     st.markdown(
@@ -557,15 +614,20 @@ def generate_skills_report(submitter_name, submitter_email):
                         <div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px 0;">
                             <div style="display: flex; justify-content: space-between;">
                                 <span>{skill_name}</span>
-                                <span><strong>{value} points</strong> (Team avg: {team_avg:.1f})</span>
+                                <span><strong>{value} points</strong> {comparison_text}</span>
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
         
+    except FileNotFoundError:
+        st.error("Skills responses file not found. This may be the first submission.")
+        return None
     except Exception as e:
-        st.error(f"Error generating report: {e}")
+        st.error(f"Error generating report: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 def update_total_points():
     """Update the total points in session state"""
