@@ -7,7 +7,7 @@ from datetime import datetime
 import uuid
 import streamlit.components.v1 as components
 import threading
-# Import the email notification function
+# Import the updated email notification function
 from email_notification import send_notification_email
 
 file_lock = threading.Lock()
@@ -714,13 +714,6 @@ def show_skills_form(submitter_email, submitter_name):
                 st.error(f"Total points must be exactly {MAX_TOTAL_POINTS}. Current total: {st.session_state.total_points}")
                 return
                 
-            # Read existing responses
-            try:
-                existing_responses = pd.read_csv("skills_responses.csv")
-            except Exception as e:
-                st.error(f"Error reading existing responses: {e}")
-                return
-
             # Prepare new response
             response_data = {
                 'Response ID': str(uuid.uuid4())[:8],
@@ -730,26 +723,18 @@ def show_skills_form(submitter_email, submitter_name):
                 **st.session_state.skills
             }
             
-            # Create new response DataFrame
-            new_response = pd.DataFrame([response_data])
-            
-            # Combine existing and new responses
-            updated_responses = pd.concat([existing_responses, new_response], ignore_index=True)
-            
-            try:
-                # Save updated responses
-                updated_responses.to_csv("skills_responses.csv", index=False)
+            # Save response to CSV
+            if save_response(response_data):
+                # Send email notification
+                email_sent = send_notification_email(submitter_name, submitter_email, st.session_state.skills)
                 
-                # Save submission data for later notification
-                send_notification_email(submitter_name, submitter_email, st.session_state.skills)
                 st.success("Form submitted successfully! Administrator will be notified of your submission.")
                 
                 # Set form_submitted to True and show success message
                 st.session_state.form_submitted = True
                 st.rerun()  # Use st.rerun() instead of st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error saving response: {e}")
-                return
+            else:
+                st.error("Error saving your response. Please try again.")
 
 def main():
     # Initialize total_points in session state if it doesn't exist
@@ -1022,7 +1007,7 @@ def main():
                 'Waste Management and Recycling (Skill 168)': 0
             }
         
-        show_skills_form(submitter_email,submitter_name)
+        show_skills_form(submitter_email, submitter_name)
 
 if __name__ == "__main__":
     main()
