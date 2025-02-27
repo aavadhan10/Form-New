@@ -705,7 +705,7 @@ def show_skills_form(submitter_email, submitter_name):
             st.markdown(get_expertise_level(value))
     
     # Submit form
-with st.form("skills_matrix"):
+        with st.form("skills_matrix"):
     submitted = st.form_submit_button("Submit Skills Matrix")
     
     if submitted:
@@ -753,6 +753,7 @@ with st.form("skills_matrix"):
         except Exception as e:
             st.error(f"An error occurred during submission: {str(e)}")
             st.info("Please try again or contact support if the issue persists.")
+
 
 def main():
     # Initialize total_points in session state if it doesn't exist
