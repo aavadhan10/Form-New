@@ -135,7 +135,7 @@ def show_admin_page():
                 )
             with subcol2:
                 if st.button("🔄 Refresh Data"):
-                    st.experimental_rerun()
+                    st.rerun()
         
         # Tabs for different analysis views
         tab1, tab2, tab3 = st.tabs(["Raw Data", "Skills Analysis", "Form Submission Trends"])
@@ -740,17 +740,13 @@ def show_skills_form(submitter_email, submitter_name):
                 # Save updated responses
                 updated_responses.to_csv("skills_responses.csv", index=False)
                 
-                # Send email notification with the skills data
-                try:
-                    send_notification_email(submitter_name, submitter_email, st.session_state.skills)
-                    st.success("Notification email sent to administrator.")
-                except Exception as email_err:
-                    st.warning(f"Form submitted successfully, but could not send notification email: {email_err}")
-                    # Continue with the form submission process even if email fails
+                # Save submission data for later notification
+                send_notification_email(submitter_name, submitter_email, st.session_state.skills)
+                st.success("Form submitted successfully! Administrator will be notified of your submission.")
                 
                 # Set form_submitted to True and show success message
                 st.session_state.form_submitted = True
-                st.experimental_rerun()
+                st.rerun()  # Use st.rerun() instead of st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error saving response: {e}")
                 return
