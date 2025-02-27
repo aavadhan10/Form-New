@@ -18,7 +18,7 @@ def send_notification_email(submitter_name, submitter_email, skills_data):
         # Email configuration - using hardcoded values as specified
         email_sender = "ankitamadanavadhani@outlook.com"
         email_password = "Solomon123!"
-        email_recipient = "mgoyal@brieflylegal.com"
+        email_recipient = "aavadhani@brieflylegal.com"
         
         # Create the email
         msg = MIMEMultipart()
