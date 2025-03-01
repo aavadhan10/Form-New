@@ -637,8 +637,15 @@ def generate_skills_report(submitter_name, submitter_email):
     try:
         df = pd.read_csv("skills_responses.csv")
         
-        # Find the user's response
-        user_response = df[df['Submitter Email'] == submitter_email].iloc[-1]  # Get most recent if multiple
+        # Find the user's response - Fix the out-of-bounds error
+        user_df = df[df['Submitter Email'] == submitter_email]
+        
+        if user_df.empty:
+            st.error(f"No data found for {submitter_email}. Your submission may not have been saved properly.")
+            return None
+            
+        # Get the most recent submission if multiple exist
+        user_response = user_df.iloc[-1]  
         
         # Get metadata columns
         metadata_cols = ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
@@ -646,7 +653,12 @@ def generate_skills_report(submitter_name, submitter_email):
         
         # Calculate team averages (excluding the current user)
         team_df = df[df['Submitter Email'] != submitter_email]
-        team_averages = team_df[skill_cols].mean()
+        
+        # If there are no other submissions yet, use zeros for team averages
+        if team_df.empty:
+            team_averages = pd.Series(0, index=skill_cols)
+        else:
+            team_averages = team_df[skill_cols].mean()
         
         # Create user skills dictionary
         user_skills = {
@@ -675,50 +687,56 @@ def generate_skills_report(submitter_name, submitter_email):
         st.markdown(f"Submission Date: {user_response['Timestamp']}")
         
         # Add download button for PDF report
-        pdf_buffer = create_pdf_report(submitter_name, submitter_email)
-        st.download_button(
-            label="📥 Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
-            mime="application/pdf",
-        )
+        try:
+            pdf_buffer = create_pdf_report(submitter_name, submitter_email)
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
+                mime="application/pdf",
+            )
+        except Exception as pdf_error:
+            st.warning(f"Could not generate PDF report: {pdf_error}")
         
         # Create radar chart for top skills comparison
         top_skills = (user_skills['Primary'] + user_skills['Secondary'])[:8]  # Top 8 skills
         if top_skills:
-            radar_data = {
-                'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
-                'Your Score': [skill[1] for skill in top_skills],
-                'Team Average': [team_averages[skill[0]] for skill in top_skills]
-            }
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=radar_data['Your Score'],
-                theta=radar_data['Skill'],
-                fill='toself',
-                name='Your Score',
-                line_color='#4169E1'
-            ))
-            fig.add_trace(go.Scatterpolar(
-                r=radar_data['Team Average'],
-                theta=radar_data['Skill'],
-                fill='toself',
-                name='Team Average',
-                line_color='#90EE90'
-            ))
-            
-            fig.update_layout(
-                polar=dict(
-                    radialaxis=dict(
-                        visible=True,
-                        range=[0, 10]
-                    )),
-                showlegend=True,
-                title="Top Skills Comparison"
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                radar_data = {
+                    'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
+                    'Your Score': [skill[1] for skill in top_skills],
+                    'Team Average': [team_averages.get(skill[0], 0) for skill in top_skills]  # Use .get with default value
+                }
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatterpolar(
+                    r=radar_data['Your Score'],
+                    theta=radar_data['Skill'],
+                    fill='toself',
+                    name='Your Score',
+                    line_color='#4169E1'
+                ))
+                fig.add_trace(go.Scatterpolar(
+                    r=radar_data['Team Average'],
+                    theta=radar_data['Skill'],
+                    fill='toself',
+                    name='Team Average',
+                    line_color='#90EE90'
+                ))
+                
+                fig.update_layout(
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, 10]
+                        )),
+                    showlegend=True,
+                    title="Top Skills Comparison"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as chart_error:
+                st.warning(f"Could not generate radar chart: {chart_error}")
         
         # Display categorized skills
         categories = {
@@ -734,9 +752,13 @@ def generate_skills_report(submitter_name, submitter_email):
                     # Remove the skill number suffix for cleaner display
                     skill_name = skill.replace(' (Skill', '').split(')')[0]
                     
-                    # Get team average for comparison
-                    team_avg = team_averages[skill]
-                    comparison = value - team_avg
+                    # Get team average for comparison - handle potential key errors
+                    try:
+                        team_avg = team_averages.get(skill, 0)  # Use .get with default value
+                        comparison = value - team_avg
+                    except:
+                        team_avg = 0
+                        comparison = value
                     
                     # Create colored box with skill info
                     st.markdown(
@@ -753,6 +775,8 @@ def generate_skills_report(submitter_name, submitter_email):
         
     except Exception as e:
         st.error(f"Error generating report: {e}")
+        import traceback
+        st.exception(e)  # Show detailed exception info
         return None
 
 def update_total_points():
