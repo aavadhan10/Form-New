@@ -7,14 +7,96 @@ from datetime import datetime
 import uuid
 import streamlit.components.v1 as components
 import threading
-# Import the updated email notification function
-from email_notification import send_notification_email
+import json
 
 file_lock = threading.Lock()
 
 # Constants
 RESPONSES_FILE = "skills_responses.csv"
+LOG_FILE = "submission_log.json"
 
+# Real-time log functions
+def add_to_log(response_data):
+    """Add a submission entry to the real-time log"""
+    try:
+        # Create log entry with timestamp
+        log_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "submitter_name": response_data.get("Submitter Name", "Unknown"),
+            "submitter_email": response_data.get("Submitter Email", "Unknown"),
+            "response_id": response_data.get("Response ID", "Unknown"),
+            "total_points": sum([v for k, v in response_data.items() 
+                               if k not in ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
+                               and isinstance(v, (int, float))]),
+            "primary_skills": sum(1 for k, v in response_data.items() 
+                               if k not in ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
+                               and isinstance(v, (int, float)) and v >= 8),
+            "secondary_skills": sum(1 for k, v in response_data.items() 
+                                 if k not in ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
+                                 and isinstance(v, (int, float)) and v >= 3 and v < 8),
+            "limited_skills": sum(1 for k, v in response_data.items() 
+                               if k not in ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
+                               and isinstance(v, (int, float)) and v >= 1 and v < 3),
+            # Add top 3 skills with highest points
+            "top_skills": sorted([(k.replace(' (Skill', '').split(')')[0], v) 
+                               for k, v in response_data.items() 
+                               if k not in ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
+                               and isinstance(v, (int, float)) and v > 0],
+                              key=lambda x: x[1], reverse=True)[:3]
+        }
+        
+        # Load existing log
+        log_entries = []
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
+            with open(LOG_FILE, 'r') as f:
+                try:
+                    log_entries = json.load(f)
+                except json.JSONDecodeError:
+                    # If file is corrupted, start with empty log
+                    log_entries = []
+        
+        # Add new entry
+        log_entries.append(log_entry)
+        
+        # Keep only the last 100 entries to prevent the file from growing too large
+        log_entries = log_entries[-100:]
+        
+        # Write back to file
+        with open(LOG_FILE, 'w') as f:
+            json.dump(log_entries, f, indent=2)
+            
+        return True
+    except Exception as e:
+        print(f"Error adding to log: {e}")
+        return False
+
+def get_log_entries(limit=50):
+    """Get the most recent log entries, with optional limit"""
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
+            with open(LOG_FILE, 'r') as f:
+                try:
+                    log_entries = json.load(f)
+                    # Return the most recent entries, limited by the parameter
+                    return log_entries[-limit:]
+                except json.JSONDecodeError:
+                    return []
+        return []
+    except Exception as e:
+        print(f"Error reading log: {e}")
+        return []
+
+def clear_log():
+    """Clear the log file"""
+    try:
+        with open(LOG_FILE, 'w') as f:
+            json.dump([], f)
+        return True
+    except Exception as e:
+        print(f"Error clearing log: {e}")
+        return False
+
+# Original functions
 def debug_csv_file():
     """Debug function to check CSV file status"""
     try:
@@ -41,9 +123,8 @@ def load_responses():
         st.error(f"Error loading responses: {e}")
         return pd.DataFrame()
         
-# Updated save_response() function
 def save_response(response_data):
-    """Save response to CSV file with thread-safe file handling and backup"""
+    """Save response to CSV file with thread-safe file handling and backup, and add to real-time log"""
     try:
         # Load existing responses
         responses_df = load_responses()
@@ -72,11 +153,15 @@ def save_response(response_data):
         # Save updated responses
         with file_lock:
             updated_responses.to_csv(RESPONSES_FILE, index=False)
+            
+        # Add to real-time log
+        add_to_log(response_data)
         
         return True
     except Exception as e:
         st.error(f"Error saving response: {e}")
         return False
+
 def check_password():
     """Returns True if the user had the correct password."""
 
@@ -104,7 +189,7 @@ def check_password():
     return False
 
 def show_admin_page():
-    """Shows the admin page with download functionality and advanced analytics"""
+    """Shows the admin page with download functionality, advanced analytics, and real-time log"""
     import plotly.express as px
     import plotly.graph_objects as go
     st.header("Admin Dashboard")
@@ -135,13 +220,65 @@ def show_admin_page():
                 )
             with subcol2:
                 if st.button("🔄 Refresh Data"):
-                    st.rerun()
+                    st.experimental_rerun()
         
         # Tabs for different analysis views
-        tab1, tab2, tab3 = st.tabs(["Raw Data", "Skills Analysis", "Form Submission Trends"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Real-time Log", "Raw Data", "Skills Analysis", "Form Submission Trends"])
         
-        # Tab 1: Raw Data
+        # Tab 1: Real-time Log
         with tab1:
+            st.subheader("Real-time Submission Log")
+            
+            # Add controls for the log
+            col1, col2, col3 = st.columns([1,1,2])
+            with col1:
+                entries_to_show = st.selectbox("Entries to show:", [10, 25, 50, 100], index=1)
+            with col2:
+                auto_refresh = st.checkbox("Auto-refresh (15s)", value=True)
+            with col3:
+                if st.button("Clear Log"):
+                    if clear_log():
+                        st.success("Log cleared successfully")
+                    else:
+                        st.error("Failed to clear log")
+            
+            # Get log entries
+            log_entries = get_log_entries(limit=entries_to_show)
+            
+            if log_entries:
+                # Create an expander for each log entry
+                for entry in reversed(log_entries):  # Show newest first
+                    with st.expander(f"**{entry['timestamp']}** - {entry['submitter_name']} ({entry['submitter_email']})"):
+                        # First row: summary information
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown(f"**Response ID:** {entry['response_id']}")
+                            st.markdown(f"**Total Points:** {entry['total_points']}")
+                        with col2:
+                            st.markdown("**Expertise Areas:**")
+                            st.markdown(f"🔵 Primary: {entry['primary_skills']}")
+                            st.markdown(f"🟢 Secondary: {entry['secondary_skills']}")
+                            st.markdown(f"🟡 Limited: {entry['limited_skills']}")
+                        with col3:
+                            st.markdown("**Top Skills:**")
+                            for skill, points in entry['top_skills']:
+                                expertise = "🔵 Primary" if points >= 8 else "🟢 Secondary" if points >= 3 else "🟡 Limited"
+                                st.markdown(f"{expertise}: {skill} ({points} pts)")
+            else:
+                st.info("No log entries found. New submissions will appear here.")
+            
+            # Add auto-refresh JavaScript
+            if auto_refresh:
+                st.markdown("""
+                <script>
+                    setTimeout(function(){
+                        window.location.reload();
+                    }, 15000);
+                </script>
+                """, unsafe_allow_html=True)
+        
+        # Tab 2: Raw Data (formerly Tab 1)
+        with tab2:
             st.subheader("Raw Response Data")
             # Reorder columns to show metadata first
             metadata_cols = ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
@@ -149,8 +286,8 @@ def show_admin_page():
             ordered_cols = metadata_cols + other_cols
             st.dataframe(responses_df[ordered_cols])
             
-        # Tab 2: Skills Analysis
-        with tab2:
+        # Tab 3: Skills Analysis (formerly Tab 2)
+        with tab3:
             # Calculate skill columns (excluding metadata columns)
             skill_cols = [col for col in responses_df.columns if col not in metadata_cols]
             
@@ -250,8 +387,8 @@ def show_admin_page():
                 fig2.update_layout(showlegend=False, xaxis_tickangle=-45)
                 st.plotly_chart(fig2, use_container_width=True)
         
-        # Tab 3: Form Submission Trends
-        with tab3:
+        # Tab 4: Form Submission Trends (formerly Tab 3)
+        with tab4:
             st.subheader("Submission Trends")
             
             # Convert timestamp to datetime if it's not already
@@ -286,10 +423,58 @@ def show_admin_page():
             ))
             fig5.update_layout(title='Cumulative Submissions Over Time')
             st.plotly_chart(fig5, use_container_width=True)
+            
     else:
         st.info("No responses collected yet.")
+        # Still show the real-time log tab even when no responses are in CSV
+        tab1, tab2 = st.tabs(["Real-time Log", "Raw Data"])
         
-# New helper functions for admin operations
+        with tab1:
+            st.subheader("Real-time Submission Log")
+            
+            # Controls for the log
+            col1, col2 = st.columns([1,3])
+            with col1:
+                entries_to_show = st.selectbox("Entries to show:", [10, 25, 50, 100], index=1)
+            with col2:
+                auto_refresh = st.checkbox("Auto-refresh (15s)", value=True)
+            
+            # Get log entries
+            log_entries = get_log_entries(limit=entries_to_show)
+            
+            if log_entries:
+                # Create an expander for each log entry
+                for entry in reversed(log_entries):  # Show newest first
+                    with st.expander(f"**{entry['timestamp']}** - {entry['submitter_name']} ({entry['submitter_email']})"):
+                        # Display entry details
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown(f"**Response ID:** {entry['response_id']}")
+                            st.markdown(f"**Total Points:** {entry['total_points']}")
+                        with col2:
+                            st.markdown("**Expertise Areas:**")
+                            st.markdown(f"🔵 Primary: {entry['primary_skills']}")
+                            st.markdown(f"🟢 Secondary: {entry['secondary_skills']}")
+                            st.markdown(f"🟡 Limited: {entry['limited_skills']}")
+                        with col3:
+                            st.markdown("**Top Skills:**")
+                            for skill, points in entry['top_skills']:
+                                expertise = "🔵 Primary" if points >= 8 else "🟢 Secondary" if points >= 3 else "🟡 Limited"
+                                st.markdown(f"{expertise}: {skill} ({points} pts)")
+            else:
+                st.info("No log entries found. New submissions will appear here.")
+            
+            # Add auto-refresh JavaScript
+            if auto_refresh:
+                st.markdown("""
+                <script>
+                    setTimeout(function(){
+                        window.location.reload();
+                    }, 15000);
+                </script>
+                """, unsafe_allow_html=True)
+        
+# Helper functions for admin operations
 def delete_response_by_id(response_id):
     """Delete a specific response by its ID"""
     try:
@@ -325,6 +510,7 @@ def clear_all_responses():
     except Exception as e:
         st.error(f"Error clearing responses: {e}")
         return False
+
 def create_pdf_report(submitter_name, submitter_email):
     """Create a PDF version of the skills report"""
     from reportlab.lib import colors
@@ -438,6 +624,7 @@ def create_pdf_report(submitter_name, submitter_email):
     doc.build(elements)
     buffer.seek(0)
     return buffer
+
 def generate_skills_report(submitter_name, submitter_email):
     """Generate a skills report for the user who just submitted"""
     import pandas as pd
@@ -450,34 +637,16 @@ def generate_skills_report(submitter_name, submitter_email):
     try:
         df = pd.read_csv("skills_responses.csv")
         
-        # Check if user data exists in the DataFrame
-        user_data = df[df['Submitter Email'] == submitter_email]
-        
-        if user_data.empty:
-            st.error(f"No data found for {submitter_email}. Please contact support.")
-            return None
-        
-        # Find the user's most recent response
-        user_response = user_data.iloc[-1]  # Get most recent if multiple
+        # Find the user's response
+        user_response = df[df['Submitter Email'] == submitter_email].iloc[-1]  # Get most recent if multiple
         
         # Get metadata columns
         metadata_cols = ['Response ID', 'Timestamp', 'Submitter Email', 'Submitter Name']
         skill_cols = [col for col in df.columns if col not in metadata_cols]
         
-        # Handle the case where there might be only one submission (the current user)
-        if len(df) <= 1:
-            # No team data available, use zeros for comparison
-            team_averages = pd.Series(0, index=skill_cols)
-            team_comparison_available = False
-        else:
-            # Calculate team averages (excluding the current user)
-            team_df = df[df['Submitter Email'] != submitter_email]
-            if team_df.empty:
-                team_averages = pd.Series(0, index=skill_cols)
-                team_comparison_available = False
-            else:
-                team_averages = team_df[skill_cols].mean()
-                team_comparison_available = True
+        # Calculate team averages (excluding the current user)
+        team_df = df[df['Submitter Email'] != submitter_email]
+        team_averages = team_df[skill_cols].mean()
         
         # Create user skills dictionary
         user_skills = {
@@ -488,19 +657,13 @@ def generate_skills_report(submitter_name, submitter_email):
         
         # Categorize skills
         for skill in skill_cols:
-            # Handle case where the skill column might not exist
-            if skill not in user_response:
-                continue
-                
             value = user_response[skill]
-            # Check if value is numeric
-            if not pd.isna(value) and isinstance(value, (int, float)):
-                if value >= 8:
-                    user_skills['Primary'].append((skill, value))
-                elif value >= 3:
-                    user_skills['Secondary'].append((skill, value))
-                elif value >= 1:
-                    user_skills['Limited'].append((skill, value))
+            if value >= 8:
+                user_skills['Primary'].append((skill, value))
+            elif value >= 3:
+                user_skills['Secondary'].append((skill, value))
+            elif value >= 1:
+                user_skills['Limited'].append((skill, value))
                 
         # Sort skills by value within each category
         for category in user_skills:
@@ -509,83 +672,53 @@ def generate_skills_report(submitter_name, submitter_email):
         # Create the report
         st.markdown("## Your Skills Matrix Report")
         st.markdown(f"### Generated for: {submitter_name}")
-        st.markdown(f"Submission Date: {user_response.get('Timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
+        st.markdown(f"Submission Date: {user_response['Timestamp']}")
         
-        # Add download button for PDF report if the function exists
-        try:
-            pdf_buffer = create_pdf_report(submitter_name, submitter_email)
-            st.download_button(
-                label="📥 Download PDF Report",
-                data=pdf_buffer,
-                file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
-                mime="application/pdf",
-            )
-        except Exception as e:
-            st.warning(f"PDF report generation unavailable: {str(e)}")
+        # Add download button for PDF report
+        pdf_buffer = create_pdf_report(submitter_name, submitter_email)
+        st.download_button(
+            label="📥 Download PDF Report",
+            data=pdf_buffer,
+            file_name=f"skills_matrix_report_{submitter_name.replace(' ', '_')}.pdf",
+            mime="application/pdf",
+        )
         
-        # Create radar chart for top skills comparison if team data is available
+        # Create radar chart for top skills comparison
         top_skills = (user_skills['Primary'] + user_skills['Secondary'])[:8]  # Top 8 skills
-        
-        if top_skills and team_comparison_available:
-            try:
-                radar_data = {
-                    'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
-                    'Your Score': [skill[1] for skill in top_skills],
-                    'Team Average': [team_averages.get(skill[0], 0) for skill in top_skills]
-                }
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatterpolar(
-                    r=radar_data['Your Score'],
-                    theta=radar_data['Skill'],
-                    fill='toself',
-                    name='Your Score',
-                    line_color='#4169E1'
-                ))
-                fig.add_trace(go.Scatterpolar(
-                    r=radar_data['Team Average'],
-                    theta=radar_data['Skill'],
-                    fill='toself',
-                    name='Team Average',
-                    line_color='#90EE90'
-                ))
-                
-                fig.update_layout(
-                    polar=dict(
-                        radialaxis=dict(
-                            visible=True,
-                            range=[0, 10]
-                        )),
-                    showlegend=True,
-                    title="Top Skills Comparison"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as chart_error:
-                st.warning(f"Could not generate radar chart: {str(chart_error)}")
-                
-        elif top_skills and not team_comparison_available:
-            st.info("You are the first submission - team comparison not available yet.")
+        if top_skills:
+            radar_data = {
+                'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
+                'Your Score': [skill[1] for skill in top_skills],
+                'Team Average': [team_averages[skill[0]] for skill in top_skills]
+            }
             
-            # Create a simple bar chart of the user's top skills
-            try:
-                bar_data = {
-                    'Skill': [skill[0].replace(' (Skill', '').split(')')[0] for skill in top_skills],
-                    'Your Score': [skill[1] for skill in top_skills]
-                }
-                
-                fig = px.bar(
-                    x=bar_data['Skill'], 
-                    y=bar_data['Your Score'],
-                    title="Your Top Skills",
-                    color=bar_data['Your Score'],
-                    color_continuous_scale=[[0, '#FFE5B4'], [0.3, '#90EE90'], [0.8, '#4169E1']]
-                )
-                fig.update_layout(xaxis_title="Skill", yaxis_title="Score")
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as chart_error:
-                st.warning(f"Could not generate bar chart: {str(chart_error)}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatterpolar(
+                r=radar_data['Your Score'],
+                theta=radar_data['Skill'],
+                fill='toself',
+                name='Your Score',
+                line_color='#4169E1'
+            ))
+            fig.add_trace(go.Scatterpolar(
+                r=radar_data['Team Average'],
+                theta=radar_data['Skill'],
+                fill='toself',
+                name='Team Average',
+                line_color='#90EE90'
+            ))
+            
+            fig.update_layout(
+                polar=dict(
+                    radialaxis=dict(
+                        visible=True,
+                        range=[0, 10]
+                    )),
+                showlegend=True,
+                title="Top Skills Comparison"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
         
         # Display categorized skills
         categories = {
@@ -601,12 +734,9 @@ def generate_skills_report(submitter_name, submitter_email):
                     # Remove the skill number suffix for cleaner display
                     skill_name = skill.replace(' (Skill', '').split(')')[0]
                     
-                    # Get team average for comparison if available
-                    if team_comparison_available:
-                        team_avg = team_averages.get(skill, 0)
-                        comparison_text = f"(Team avg: {team_avg:.1f})"
-                    else:
-                        comparison_text = "(No team data yet)"
+                    # Get team average for comparison
+                    team_avg = team_averages[skill]
+                    comparison = value - team_avg
                     
                     # Create colored box with skill info
                     st.markdown(
@@ -614,21 +744,17 @@ def generate_skills_report(submitter_name, submitter_email):
                         <div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px 0;">
                             <div style="display: flex; justify-content: space-between;">
                                 <span>{skill_name}</span>
-                                <span><strong>{value} points</strong> {comparison_text}</span>
+                                <span><strong>{value} points</strong> (Team avg: {team_avg:.1f})</span>
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
         
-    except FileNotFoundError:
-        st.error("Skills responses file not found. This may be the first submission.")
-        return None
     except Exception as e:
-        st.error(f"Error generating report: {str(e)}")
-        import traceback
-        st.error(traceback.format_exc())
+        st.error(f"Error generating report: {e}")
         return None
+
 def update_total_points():
     """Update the total points in session state"""
     total = 0
@@ -766,30 +892,23 @@ def show_skills_form(submitter_email, submitter_name):
         with col3:
             st.markdown(get_expertise_level(value))
     
-    # Use a unique form key that won't conflict with other instances
-    form_key = f"skills_matrix_{submitter_email}"
-    
-    # Submit form - checking first if this user has already created a form
-    if 'has_form' not in st.session_state:
-        st.session_state.has_form = False
+    # Submit form
+    with st.form("skills_matrix"):
+        submitted = st.form_submit_button("Submit Skills Matrix")
         
-    if not st.session_state.has_form:
-        with st.form(key=form_key):
-            submitted = st.form_submit_button("Submit Skills Matrix")
-            st.session_state.has_form = True
-    else:
-        # If a form was already created, just show a non-functional button
-        submitted = False
-        st.button("Submit Skills Matrix", key="dummy_submit", disabled=True)
-        
-    # Handle form submission
-    if submitted:
-        try:
+        if submitted:
             # Validate total points before submission
             if abs(st.session_state.total_points - MAX_TOTAL_POINTS) > 0.1:
                 st.error(f"Total points must be exactly {MAX_TOTAL_POINTS}. Current total: {st.session_state.total_points}")
                 return
                 
+            # Read existing responses
+            try:
+                existing_responses = pd.read_csv("skills_responses.csv")
+            except Exception as e:
+                st.error(f"Error reading existing responses: {e}")
+                return
+
             # Prepare new response
             response_data = {
                 'Response ID': str(uuid.uuid4())[:8],
@@ -799,34 +918,23 @@ def show_skills_form(submitter_email, submitter_name):
                 **st.session_state.skills
             }
             
-            # Save response to CSV first
-            save_success = save_response(response_data)
-            if not save_success:
-                st.error("Error saving your response. Please try again.")
-                return
+            # Create new response DataFrame
+            new_response = pd.DataFrame([response_data])
             
-            # Show success message immediately
-            st.success("Form submitted successfully! Administrator will be notified of your submission.")
+            # Combine existing and new responses
+            updated_responses = pd.concat([existing_responses, new_response], ignore_index=True)
             
-            # Try to send email notification, but continue even if it fails
             try:
-                email_sent = send_notification_email(submitter_name, submitter_email, st.session_state.skills)
-                if email_sent:
-                    st.info("Email notification sent successfully.")
-                else:
-                    st.warning("Email notification could not be sent, but your submission was saved.")
-            except Exception as e:
-                st.warning(f"Email notification error: {str(e)}, but your submission was saved.")
-            
-            # Set form_submitted to True
-            st.session_state.form_submitted = True
-            
-            # Add a button to view report
-            st.button("View Your Skills Report", on_click=st.rerun)
+                # Save updated responses
+                updated_responses.to_csv("skills_responses.csv", index=False)
                 
-        except Exception as e:
-            st.error(f"An error occurred during submission: {str(e)}")
-            st.info("Please try again or contact support if the issue persists.")
+                # Set form_submitted to True and show success message
+                st.session_state.form_submitted = True
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Error saving response: {e}")
+                return
+
 def main():
     # Initialize total_points in session state if it doesn't exist
     if 'total_points' not in st.session_state:
@@ -1098,7 +1206,7 @@ def main():
                 'Waste Management and Recycling (Skill 168)': 0
             }
         
-        show_skills_form(submitter_email, submitter_name)
+        show_skills_form(submitter_email,submitter_name)
 
 if __name__ == "__main__":
     main()
