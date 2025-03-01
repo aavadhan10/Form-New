@@ -220,7 +220,7 @@ def show_admin_page():
                 )
             with subcol2:
                 if st.button("🔄 Refresh Data"):
-                    st.experimental_rerun()
+                    st.rerun()
         
         # Tabs for different analysis views
         tab1, tab2, tab3, tab4 = st.tabs(["Real-time Log", "Raw Data", "Skills Analysis", "Form Submission Trends"])
@@ -930,7 +930,7 @@ def show_skills_form(submitter_email, submitter_name):
                 
                 # Set form_submitted to True and show success message
                 st.session_state.form_submitted = True
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Error saving response: {e}")
                 return
